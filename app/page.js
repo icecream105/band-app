@@ -19,7 +19,6 @@ export default function Home() {
   useEffect(() => {
     fetchReservations();
 
-    // 실시간 동기화 구독
     const channel = supabase
       .channel('realtime-reservations')
       .on(
@@ -35,7 +34,15 @@ export default function Home() {
   }, []);
 
   const fetchReservations = async () => {
-    const { data } = await supabase.from('reservations').select('*');
+    // 보안을 위해 pin 컬럼은 가져오지 않음
+    const { data, error } = await supabase
+      .from('reservations')
+      .select('id, day, time_slot, user_name, category');
+    
+    if (error) {
+      console.error('예약 목록 조회 실패:', error);
+      return;
+    }
     if (data) setReservations(data);
   };
 
@@ -45,24 +52,45 @@ export default function Home() {
       return;
     }
 
+    if (pin.trim().length !== 4) {
+      alert('비밀번호는 4자리로 입력해주세요.');
+      return;
+    }
+
     const { error } = await supabase.from('reservations').insert([
-      { day, time_slot: timeSlot, user_name: userName, category, pin }
+      { day, time_slot: timeSlot, user_name: userName.trim(), category, pin: pin.trim() }
     ]);
 
     if (error) {
       if (error.code === '23505') alert('이미 예약된 시간대입니다.');
       else alert('예약 중 오류가 발생했습니다.');
+    } else {
+      setPin(''); // 예약 성공 시 비밀번호 필드 초기화
+      fetchReservations(); // 수동 갱신 보장
     }
   };
 
-  const handleDelete = async (id, targetPin) => {
+  const handleDelete = async (id) => {
     const inputPin = prompt('예약 취소를 위해 4자리 비밀번호를 입력하세요:');
-    if (inputPin !== targetPin) {
-      alert('비밀번호가 일치하지 않습니다.');
-      return;
-    }
+    
+    // 취소 버튼을 누르거나 빈 값을 입력한 경우
+    if (inputPin === null || !inputPin.trim()) return;
 
-    await supabase.from('reservations').delete().eq('id', id);
+    // Supabase RLS 또는 RPC를 통해 삭제 시 pin 검증 수행
+    const { error, count } = await supabase
+      .from('reservations')
+      .delete({ count: 'exact' })
+      .eq('id', id)
+      .eq('pin', inputPin.trim());
+
+    if (error) {
+      alert('삭제 도중 오류가 발생했습니다.');
+    } else if (count === 0) {
+      alert('비밀번호가 일치하지 않습니다.');
+    } else {
+      alert('예약이 취소되었습니다.');
+      fetchReservations(); // 수동 갱신 보장
+    }
   };
 
   return (
@@ -133,10 +161,10 @@ export default function Home() {
                         <div className="text-[10px] text-gray-500">{reserved.category}</div>
                       </div>
                       <button
-                        className="text-red-400 font-bold hover:text-red-600 ml-1"
+                        className="text-red-400 font-bold hover:text-red-600 ml-1 p-1"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDelete(reserved.id, reserved.pin);
+                          handleDelete(reserved.id);
                         }}
                       >
                         ✕
